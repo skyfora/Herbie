@@ -248,8 +248,9 @@ class FastHerbie:
         search: Optional[str],
         *,
         max_threads: Optional[int] = None,
+        flatten_hypercubes: bool = False,
         **xarray_kwargs,
-    ) -> xr.Dataset:
+    ) -> Union[xr.Dataset, list[xr.Dataset]]:
         """Read many Herbie objects into an xarray Dataset.
 
         # TODO: Sometimes the Jupyter Cell always crashes when I run this.
@@ -299,30 +300,64 @@ class FastHerbie:
         else:
             ds_list = [H.xarray(**xarray_kwargs) for H in self.file_exists]
 
-        # Sort the DataSets, first by lead time (step), then by run time (time)
-        ds_list.sort(key=lambda x: x.step.data.max())
-        ds_list.sort(key=lambda x: x.time.data.max())
+        # If ds_list elements are lists, then we have multiple hypercubes per timestep
+        # We need to arrange them by type of level and then sort/concat.
+        hypercubes: dict[str, list[xr.Dataset]] = {}
+        for ds in ds_list:
+            if isinstance(ds, list):
+                log.debug(f"Multiple hypercubes found")
+                for ds_hypercube in ds:
+                    # any data var in the list can be used to determine the type of level
+                    # b/c xarray returns individual hypercubes as datasets with data_vars attached
+                    # to one and only one type of level.
+                    data_var = list(ds_hypercube.data_vars)[0]
+                    hypercube = ds_hypercube[data_var].attrs.get('GRIB_typeOfLevel')
+                    hypercube_level_value = ds_hypercube[hypercube].values.tolist()
+                    hypercube_id = hypercube + "_" + str(hypercube_level_value)
+                    if hypercube_id not in hypercubes:
+                        hypercubes[hypercube_id] = []
+                    hypercubes[hypercube_id].append(ds_hypercube)
+            elif isinstance(ds, xr.Dataset):
+                log.debug(f"Single hypercube found")
+                data_var = list(ds.data_vars)[0]
+                hypercube = ds[data_var].attrs.get('GRIB_typeOfLevel')
+                hypercube_level_value = ds[hypercube].values[0]
+                hypercube_id = hypercube + "_" + str(hypercube_level_value)
+                if hypercube_id not in hypercubes:
+                    hypercubes[hypercube_id] = []
+                hypercubes[hypercube_id].append(ds)
+            else:
+                raise NotImplementedError(f"Unknown object type encountered while reading GRIB files with xarray: {ds}")
 
-        # Reshape list with dimensions (len(DATES), len(fxx))
-        ds_list = [
-            ds_list[x : x + len(self.fxx)]
-            for x in range(0, len(ds_list), len(self.fxx))
-        ]
+        hypercubes_single: dict[str, xr.Dataset] = {}
+        for type_of_level, hypercube_ds_list in hypercubes.items():
+            # Sort the DataSets, first by lead time (step), then by run time (time)
+            hypercube_ds_list.sort(key=lambda x: x.step.data.max() if hasattr(x.step, 'data') else 0)
+            hypercube_ds_list.sort(key=lambda x: x.time.data.max() if hasattr(x.time, 'data') else 0)
 
-        # Concat DataSets
-        try:
-            ds = xr.combine_nested(
-                ds_list,
-                concat_dim=["time", "step"],
-                combine_attrs="drop_conflicts",
-            )
-        except Exception:
-            # TODO: I'm not sure why some cases doesn't like the combine_attrs argument
-            ds = xr.combine_nested(
-                ds_list,
-                concat_dim=["time", "step"],
-            )
+            # Reshape list with dimensions (len(DATES), len(fxx))
+            hypercube_ds_list = [
+                hypercube_ds_list[x : x + len(self.fxx)]
+                for x in range(0, len(hypercube_ds_list), len(self.fxx))
+            ]
+            # Concat DataSets
+            try:
+                ds = xr.combine_nested(hypercube_ds_list,concat_dim=["time", "step"],combine_attrs="drop_conflicts",)
+                ds = xr.combine_nested(hypercube_ds_list,concat_dim=["time"],combine_attrs="drop_conflicts",)
+            except Exception:
+                # TODO: I'm not sure why some cases doesn't like the combine_attrs argument
+                ds = xr.combine_nested(
+                    hypercube_ds_list,
+                    concat_dim=["time", "step"],
+                )
 
-        ds = ds.squeeze()
+            ds = ds.squeeze()
+            hypercubes_single[type_of_level] = ds
+        
+        if flatten_hypercubes:
+            for hypercube_id, ds in hypercubes_single.items():
+                hypercube_name = hypercube_id.split("_")[0]
+                hypercubes_single[hypercube_id] = ds.drop_vars(hypercube_name)
+            return xr.merge(list(hypercubes_single.values()), join="exact")
 
-        return ds
+        return list(hypercubes_single.values())
