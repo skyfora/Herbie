@@ -1145,6 +1145,7 @@ class Herbie:
             ],
         )
         backend_kwargs.setdefault("errors", "raise")
+        backend_kwargs.setdefault("decode_timedelta", False)
 
         # Use cfgrib.open_datasets, just in case there are multiple "hypercubes"
         # for what we requested.
