@@ -357,7 +357,7 @@ class FastHerbie:
         if flatten_hypercubes:
             for hypercube_id, ds in hypercubes_single.items():
                 hypercube_name = hypercube_id.split("_")[0]
-                hypercubes_single[hypercube_id] = ds.drop_vars(hypercube_name)
+                hypercubes_single[hypercube_id] = ds
             return xr.merge(list(hypercubes_single.values()), join="exact")
 
         return list(hypercubes_single.values())
