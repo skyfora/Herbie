@@ -312,7 +312,12 @@ class FastHerbie:
                     # to one and only one type of level.
                     data_var = list(ds_hypercube.data_vars)[0]
                     hypercube = ds_hypercube[data_var].attrs.get('GRIB_typeOfLevel')
-                    hypercube_level_value = ds_hypercube[hypercube].values.tolist()
+                    hypercube_level_value = ds_hypercube[hypercube].values
+                    # Handle both scalar (0-dimensional) and array cases
+                    if hypercube_level_value.ndim == 0:
+                        hypercube_level_value = hypercube_level_value.item()
+                    else:
+                        hypercube_level_value = hypercube_level_value.tolist()
                     hypercube_id = hypercube + "_" + str(hypercube_level_value)
                     if hypercube_id not in hypercubes:
                         hypercubes[hypercube_id] = []
@@ -321,7 +326,12 @@ class FastHerbie:
                 log.debug(f"Single hypercube found")
                 data_var = list(ds.data_vars)[0]
                 hypercube = ds[data_var].attrs.get('GRIB_typeOfLevel')
-                hypercube_level_value = ds[hypercube].values[0]
+                hypercube_level_value = ds[hypercube].values
+                # Handle both scalar (0-dimensional) and array cases
+                if hypercube_level_value.ndim == 0:
+                    hypercube_level_value = hypercube_level_value.item()
+                else:
+                    hypercube_level_value = hypercube_level_value[0]
                 hypercube_id = hypercube + "_" + str(hypercube_level_value)
                 if hypercube_id not in hypercubes:
                     hypercubes[hypercube_id] = []
