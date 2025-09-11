@@ -864,7 +864,6 @@ class Herbie:
             When an error occurs, send a warning or raise a value error.
 
         """
-
         def _reporthook(a, b, c):
             """
             Print download progress in megabytes.

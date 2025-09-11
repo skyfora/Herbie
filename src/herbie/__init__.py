@@ -106,6 +106,13 @@ verbose = true
 #
 #priority = ['aws', 'nomads', 'google', 'etc.']
 
+# =============================================================================
+# Serverless configuration
+# Set to true to prevent all file writes (for serverless/read-only environments)
+# When enabled, Herbie will use temporary files and in-memory operations
+#
+#serverless = false
+
 """
 
 # Default `custom_template.py` placeholder
@@ -145,53 +152,75 @@ class model1_name:
 """
 
 ########################################################################
+# Check for serverless mode
+_serverless_mode = os.getenv("HERBIE_SERVERLESS", "false").lower() in ["true", "1", "yes"]
+
+########################################################################
 # Load config file (create one if needed)
 try:
     # Load the Herbie config file
     config = toml.load(_config_file)
 except Exception:
-    try:
-        # Create the Herbie config file
-        _config_path.mkdir(parents=True, exist_ok=True)
-        with open(_config_file, "w", encoding="utf-8") as f:
-            f.write(default_toml)
+    if not _serverless_mode:
+        try:
+            # Create the Herbie config file
+            _config_path.mkdir(parents=True, exist_ok=True)
+            with open(_config_file, "w", encoding="utf-8") as f:
+                f.write(default_toml)
 
-        # Create `custom_template.py` placeholder
-        _init_path = _config_path / "__init__.py"
-        _custom_path = _config_path / "custom_template.py"
-        if not _init_path.exists():
-            with open(_init_path, "w") as f:
-                pass
-        if not _custom_path.exists():
-            with open(_custom_path, "w") as f:
-                f.write(default_custom_template)
+            # Create `custom_template.py` placeholder
+            _init_path = _config_path / "__init__.py"
+            _custom_path = _config_path / "custom_template.py"
+            if not _init_path.exists():
+                with open(_init_path, "w") as f:
+                    pass
+            if not _custom_path.exists():
+                with open(_custom_path, "w") as f:
+                    f.write(default_custom_template)
 
-        print(
-            f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-            f" │ INFO: Created a default config file.                 │\n"
-            f" │ You may view/edit Herbie's configuration here:       │\n"
-            f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
-            f" ╰──────────────────────────────────────────────────────╯\n"
-        )
+            print(
+                f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
+                f" │ INFO: Created a default config file.                 │\n"
+                f" │ You may view/edit Herbie's configuration here:       │\n"
+                f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
+                f" ╰──────────────────────────────────────────────────────╯\n"
+            )
 
-        # Load the new Herbie config file
-        config = toml.load(_config_file)
-    except (FileNotFoundError, PermissionError, IOError):
-        print(
-            f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-            f" │ WARNING: Unable to create config file               │\n"
-            f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
-            f" │ Herbie will use standard default settings.           │\n"
-            f" │ Consider setting env variable HERBIE_CONFIG_PATH.    │\n"
-            f" ╰──────────────────────────────────────────────────────╯\n"
-        )
+            # Load the new Herbie config file
+            config = toml.load(_config_file)
+        except (FileNotFoundError, PermissionError, IOError):
+            print(
+                f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
+                f" │ WARNING: Unable to create config file               │\n"
+                f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
+                f" │ Herbie will use standard default settings.           │\n"
+                f" │ Consider setting env variable HERBIE_CONFIG_PATH.    │\n"
+                f" ╰──────────────────────────────────────────────────────╯\n"
+            )
+            config = toml.loads(default_toml)
+    else:
+        # In serverless mode, use default configuration without file writes
         config = toml.loads(default_toml)
+        print(
+            f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
+            f" │ INFO: Running in serverless mode                     │\n"
+            f" │ File writes are disabled. Using default config.      │\n"
+            f" ╰──────────────────────────────────────────────────────╯\n"
+        )
 
+
+# Set serverless mode in config
+config["default"]["serverless"] = _serverless_mode
 
 # Expand the full path for `save_dir`
-config["default"]["save_dir"] = Path(config["default"]["save_dir"]).expand()
+if _serverless_mode:
+    # In serverless mode, use temp directory for any required file operations
+    import tempfile
+    config["default"]["save_dir"] = Path(tempfile.gettempdir()) / "herbie_temp"
+else:
+    config["default"]["save_dir"] = Path(config["default"]["save_dir"]).expand()
 
-if os.getenv("HERBIE_SAVE_DIR"):
+if os.getenv("HERBIE_SAVE_DIR") and not _serverless_mode:
     config["default"]["save_dir"] = Path(os.getenv("HERBIE_SAVE_DIR")).expand()
     print(
         f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
