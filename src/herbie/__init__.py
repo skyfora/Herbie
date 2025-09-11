@@ -153,60 +153,96 @@ class model1_name:
 
 ########################################################################
 # Check for serverless mode
-_serverless_mode = os.getenv("HERBIE_SERVERLESS", "false").lower() in ["true", "1", "yes"]
+# Auto-detect serverless environments or use explicit setting
+def _detect_serverless_environment():
+    """Detect if we're running in a serverless environment."""
+    # Explicit setting takes precedence
+    explicit_setting = os.getenv("HERBIE_SERVERLESS", "").lower()
+    if explicit_setting in ["true", "1", "yes"]:
+        return True
+    if explicit_setting in ["false", "0", "no"]:
+        return False
+    
+    # Auto-detect common serverless environments
+    serverless_indicators = [
+        "AWS_LAMBDA_FUNCTION_NAME",      # AWS Lambda
+        "GOOGLE_CLOUD_PROJECT",          # Google Cloud Functions
+        "AZURE_FUNCTIONS_WORKER_RUNTIME", # Azure Functions
+        "VERCEL",                        # Vercel
+        "NETLIFY",                       # Netlify
+        "SCW_FUNCTION_NAME",             # Scaleway Functions
+        "RAILWAY_ENVIRONMENT",           # Railway
+        "RENDER",                        # Render
+    ]
+    
+    # Check for read-only filesystem (common in containers/serverless)
+    try:
+        test_path = Path.home() / ".herbie_write_test"
+        test_path.touch()
+        test_path.unlink()
+    except (OSError, PermissionError, FileNotFoundError):
+        return True
+    
+    # Check environment variables
+    return any(os.getenv(indicator) for indicator in serverless_indicators)
+
+_serverless_mode = _detect_serverless_environment()
 
 ########################################################################
 # Load config file (create one if needed)
-try:
-    # Load the Herbie config file
-    config = toml.load(_config_file)
-except Exception:
-    if not _serverless_mode:
-        try:
-            # Create the Herbie config file
-            _config_path.mkdir(parents=True, exist_ok=True)
-            with open(_config_file, "w", encoding="utf-8") as f:
-                f.write(default_toml)
-
-            # Create `custom_template.py` placeholder
-            _init_path = _config_path / "__init__.py"
-            _custom_path = _config_path / "custom_template.py"
-            if not _init_path.exists():
-                with open(_init_path, "w") as f:
-                    pass
-            if not _custom_path.exists():
-                with open(_custom_path, "w") as f:
-                    f.write(default_custom_template)
-
-            print(
-                f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-                f" │ INFO: Created a default config file.                 │\n"
-                f" │ You may view/edit Herbie's configuration here:       │\n"
-                f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
-                f" ╰──────────────────────────────────────────────────────╯\n"
-            )
-
-            # Load the new Herbie config file
-            config = toml.load(_config_file)
-        except (FileNotFoundError, PermissionError, IOError):
-            print(
-                f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-                f" │ WARNING: Unable to create config file               │\n"
-                f" │ {ANSI.orange}{str(_config_file):^50s}{ANSI.reset}   │\n"
-                f" │ Herbie will use standard default settings.           │\n"
-                f" │ Consider setting env variable HERBIE_CONFIG_PATH.    │\n"
-                f" ╰──────────────────────────────────────────────────────╯\n"
-            )
-            config = toml.loads(default_toml)
-    else:
-        # In serverless mode, use default configuration without file writes
+def _load_or_create_config():
+    """Safely load or create configuration, handling serverless environments."""
+    if _serverless_mode:
+        # In serverless mode, use default configuration without file operations
         config = toml.loads(default_toml)
-        print(
-            f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-            f" │ INFO: Running in serverless mode                     │\n"
-            f" │ File writes are disabled. Using default config.      │\n"
-            f" ╰──────────────────────────────────────────────────────╯\n"
-        )
+        # Only print if verbose mode is enabled (check env var)
+        if os.getenv("HERBIE_VERBOSE", "true").lower() not in ["false", "0", "no"]:
+            print(f"Herbie: Running in serverless mode - using default config")
+        return config
+    
+    # Try to load existing config file
+    try:
+        config = toml.load(_config_file)
+        return config
+    except FileNotFoundError:
+        # Config file doesn't exist, try to create it
+        pass
+    except Exception as e:
+        # Other errors loading config (permissions, corrupt file, etc.)
+        if os.getenv("HERBIE_VERBOSE", "true").lower() not in ["false", "0", "no"]:
+            print(f"Herbie: Warning - Could not load config file: {e}")
+        return toml.loads(default_toml)
+    
+    # Attempt to create config file and directory
+    try:
+        _config_path.mkdir(parents=True, exist_ok=True)
+        with open(_config_file, "w", encoding="utf-8") as f:
+            f.write(default_toml)
+
+        # Create `custom_template.py` placeholder
+        _init_path = _config_path / "__init__.py"
+        _custom_path = _config_path / "custom_template.py"
+        if not _init_path.exists():
+            with open(_init_path, "w") as f:
+                pass
+        if not _custom_path.exists():
+            with open(_custom_path, "w") as f:
+                f.write(default_custom_template)
+
+        # Only print success message if verbose
+        if os.getenv("HERBIE_VERBOSE", "true").lower() not in ["false", "0", "no"]:
+            print(f"Herbie: Created config file at {_config_file}")
+
+        # Load the newly created config file
+        return toml.load(_config_file)
+        
+    except (OSError, PermissionError, IOError) as e:
+        # Failed to create config file - fall back to defaults
+        if os.getenv("HERBIE_VERBOSE", "true").lower() not in ["false", "0", "no"]:
+            print(f"Herbie: Using default config (could not write to {_config_file})")
+        return toml.loads(default_toml)
+
+config = _load_or_create_config()
 
 
 # Set serverless mode in config
@@ -222,13 +258,9 @@ else:
 
 if os.getenv("HERBIE_SAVE_DIR") and not _serverless_mode:
     config["default"]["save_dir"] = Path(os.getenv("HERBIE_SAVE_DIR")).expand()
-    print(
-        f" ╭─{ANSI.herbie}─────────────────────────────────────────────╮\n"
-        f" │ INFO: Overriding the configured save_dir because the │\n"
-        f" │ environment variable HERBIE_SAVE_DIR is set to       │\n"
-        f" │ {ANSI.orange}{os.getenv('HERBIE_SAVE_DIR'):^50s}{ANSI.reset}   │\n"
-        f" ╰──────────────────────────────────────────────────────╯\n"
-    )
+    # Only print if verbose mode is enabled
+    if os.getenv("HERBIE_VERBOSE", "true").lower() not in ["false", "0", "no"]:
+        print(f"Herbie: Using save_dir from HERBIE_SAVE_DIR: {os.getenv('HERBIE_SAVE_DIR')}")
 
 from herbie.core import Herbie
 from herbie.show_versions import show_versions
